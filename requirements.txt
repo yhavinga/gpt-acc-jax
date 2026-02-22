@@ -1,0 +1,16 @@
+# Local development (CPU or Metal)
+# For Metal/GPU on Mac: uncomment jax-metal
+#jax-metal==0.1.1
+
+jax==0.8.0
+jaxlib==0.8.0
+flax>=0.10.0
+optax>=0.2.2
+numpy>=1.26.4
+
+# Testing
+pytest>=8.0.0
+
+# CLI/logging
+rich>=13.0.0
+tqdm>=4.65.0

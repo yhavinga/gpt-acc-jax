@@ -1,0 +1,93 @@
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+*.cover
+.hypothesis/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Model artifacts and checkpoints
+*.pth
+*.pkl
+*.h5
+*.safetensors
+*.ckpt
+checkpoints/
+checkpoint*/
+experiments/
+analysis/
+outputs/
+
+# Large reference files
+artifacts/reference-configs/*.npz
+
+# Logs
+*.log
+logs/
+wandb/
+runs/
+.tensorboard/
+
+# Documentation
+docs/_build/
+*.pdf
+
+# Cache directories
+.cache/
+.huggingface/
+.transformers/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Data files (usually large)
+data/
+datasets/
+*.csv
+*.json
+*.jsonl
+# *.txt  # Disabled - we need requirements*.txt files
+*.tsv
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z

@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local development
+*.log
+*.tmp
+
+# Experiment outputs
+checkpoints/
+logs/
+plots/
+*.ckpt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials (never commit)
+*.json
+!package.json
+credentials/
+secrets/
+.env
+*.env
+
+# Claude Code
+.claude/
