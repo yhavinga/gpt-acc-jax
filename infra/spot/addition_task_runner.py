@@ -77,6 +77,9 @@ class Config:
     )
     eval_every: int = 1000
     seed: int = 42
+    # Architectural options for param reduction
+    ffn_bias: bool = True        # Use bias in FFN layers
+    tied_embeddings: bool = False # Tie input/output embeddings
 
 
 TOKENS = {'0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
@@ -116,6 +119,8 @@ def run_training(config: Config, output_dir: str, task_id: str = None):
                 "batch_size": config.batch_size,
                 "learning_rate": config.learning_rate,
                 "warmup_steps": config.warmup_steps,
+                "ffn_bias": config.ffn_bias,
+                "tied_embeddings": config.tied_embeddings,
             },
         )
         print(f"[wandb] Initialized: {wandb.run.url}")
@@ -144,11 +149,12 @@ def run_training(config: Config, output_dir: str, task_id: str = None):
         n_heads: int
         d_model: int
         d_ff: int
+        ffn_bias: bool = True
         @nn.compact
         def __call__(self, x):
             x = x + CausalSelfAttention(self.n_heads, self.d_model)(nn.LayerNorm()(x))
-            h = jax.nn.gelu(nn.Dense(self.d_ff)(nn.LayerNorm()(x)))
-            return x + nn.Dense(self.d_model)(h)
+            h = jax.nn.gelu(nn.Dense(self.d_ff, use_bias=self.ffn_bias)(nn.LayerNorm()(x)))
+            return x + nn.Dense(self.d_model, use_bias=self.ffn_bias)(h)
 
     class AdditionTransformer(nn.Module):
         config: Config
@@ -156,10 +162,16 @@ def run_training(config: Config, output_dir: str, task_id: str = None):
         def __call__(self, x):
             B, T = x.shape
             cfg = self.config
-            x = nn.Embed(cfg.vocab_size, cfg.d_model)(x) + nn.Embed(cfg.max_seq_len, cfg.d_model)(jnp.arange(T))
+            tok_emb = nn.Embed(cfg.vocab_size, cfg.d_model)
+            x = tok_emb(x) + nn.Embed(cfg.max_seq_len, cfg.d_model)(jnp.arange(T))
             for _ in range(cfg.n_layers):
-                x = TransformerBlock(cfg.n_heads, cfg.d_model, cfg.d_ff)(x)
-            return nn.Dense(cfg.vocab_size, use_bias=False)(nn.LayerNorm()(x))
+                x = TransformerBlock(cfg.n_heads, cfg.d_model, cfg.d_ff, cfg.ffn_bias)(x)
+            x = nn.LayerNorm()(x)
+            if cfg.tied_embeddings:
+                # Reuse token embedding weights for output projection
+                return x @ tok_emb.embedding.T
+            else:
+                return nn.Dense(cfg.vocab_size, use_bias=False)(x)
 
     # Initialize
     rng = jax.random.PRNGKey(config.seed)
@@ -280,18 +292,25 @@ def main():
     print(f"[addition_task_runner] Task: {args.task_id}")
     print(f"[addition_task_runner] Output: {args.output}")
 
-    # Find config - supports both old format (5 fields) and new format (7 fields)
+    # Find config - supports multiple formats:
+    # 5 fields: (task_id, n_layers, n_heads, d_model, d_ff)
+    # 7 fields: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio)
+    # 9 fields: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb)
     config_entry = next((e for e in ADDITION_SWEEP if e[0] == args.task_id), None)
     if not config_entry:
         print(f"[error] Unknown task_id: {args.task_id}")
         sys.exit(1)
 
     # Parse config entry (backwards compatible)
+    lr, warmup_ratio = 1e-3, 0.05
+    ffn_bias, tied_emb = True, False
+
     if len(config_entry) == 5:
         _, n_layers, n_heads, d_model, d_ff = config_entry
-        lr, warmup_ratio = 1e-3, 0.05
-    else:
+    elif len(config_entry) == 7:
         _, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio = config_entry
+    elif len(config_entry) >= 9:
+        _, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb = config_entry[:9]
 
     # Calculate warmup steps as percentage of total curriculum
     total_steps = 27000  # 2000 + 5000 + 20000
@@ -303,9 +322,15 @@ def main():
         d_model=d_model,
         d_ff=d_ff,
         learning_rate=lr,
-        warmup_steps=warmup_steps
+        warmup_steps=warmup_steps,
+        ffn_bias=ffn_bias,
+        tied_embeddings=tied_emb
     )
-    print(f"  Config: {n_layers}L {n_heads}H d={d_model} ff={d_ff} lr={lr} warmup={warmup_steps}")
+    flags = []
+    if not ffn_bias: flags.append("no-bias")
+    if tied_emb: flags.append("tied-emb")
+    flag_str = f" [{', '.join(flags)}]" if flags else ""
+    print(f"  Config: {n_layers}L {n_heads}H d={d_model} ff={d_ff} lr={lr} warmup={warmup_steps}{flag_str}")
 
     # Note: orchestrator handles all GCS state management
     # Task runner only trains and logs to wandb

@@ -35,26 +35,43 @@ REMOTE_DIR = "~/gpt-acc-jax"
 # ============================================================================
 # ADDITION EXPERIMENT SWEEP
 # Each entry: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio)
-# lr and warmup_ratio are optional (defaults: 1e-3, 0.05)
+# Extended: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb)
 # ============================================================================
 
 ADDITION_SWEEP = [
+    # -------------------------------------------------------------------------
+    # ULTRA-PICO: Architectural optimizations to go sub-1K params
+    # -------------------------------------------------------------------------
+
+    # d=7 variants with architectural opts (base ~1,106 params)
+    ("pico-1L-7d-nob", 1, 1, 7, 28, 1e-2, 0.05, False, False),    # ~1,071 (no FFN bias)
+    ("pico-1L-7d-tied", 1, 1, 7, 28, 1e-2, 0.05, True, True),     # ~1,008 (tied emb)
+    ("pico-1L-7d-both", 1, 1, 7, 28, 1e-2, 0.05, False, True),    # ~973 (both opts)
+
+    # d=6 with opts (base ~876 params)
+    ("pico-1L-6d-nob", 1, 1, 6, 24, 1e-2, 0.05, False, False),    # ~846 (no FFN bias)
+    ("pico-1L-6d-tied", 1, 1, 6, 24, 1e-2, 0.05, True, True),     # ~792 (tied emb)
+    ("pico-1L-6d-both", 1, 1, 6, 24, 1e-2, 0.05, False, True),    # ~762 (both opts)
+
+    # d=5 with opts (base ~645 params)
+    ("pico-1L-5d-both", 1, 1, 5, 20, 1e-2, 0.05, False, True),    # ~575 (both opts)
+
     # -------------------------------------------------------------------------
     # PICO SWEEP: Finding absolute minimum (sub-1K params?)
     # -------------------------------------------------------------------------
 
     # Ultra-tiny: can we go below 1,360?
-    ("pico-1L-4d", 1, 1, 4, 16, 1e-2, 0.05),           # 468 params
+    ("pico-1L-4d", 1, 1, 4, 16, 1e-2, 0.05),           # 468 params - FAIL 0%
     ("pico-1L-5d", 1, 1, 5, 20, 1e-2, 0.05),           # 645 params
-    ("pico-1L-6d", 1, 1, 6, 24, 1e-2, 0.05),           # 846 params
-    ("pico-1L-7d", 1, 1, 7, 28, 1e-2, 0.05),           # 1,071 params
+    ("pico-1L-6d", 1, 1, 6, 24, 1e-2, 0.05),           # 876 params
+    ("pico-1L-7d", 1, 1, 7, 28, 1e-2, 0.05),           # 1,106 params
 
     # Boundary testing around 1,360 (known smallest passing)
-    ("nano-1L-8d-lr02", 1, 1, 8, 32, 2e-2, 0.05),      # 1,360 params, even higher LR
-    ("nano-1L-8d-lr005", 1, 1, 8, 32, 5e-3, 0.05),     # 1,360 params, medium LR
+    ("nano-1L-8d-lr02", 1, 1, 8, 32, 2e-2, 0.05),      # 1,360 params - PASS 100%
+    ("nano-1L-8d-lr005", 1, 1, 8, 32, 5e-3, 0.05),     # 1,360 params - PASS 99.98%
 
     # Does 2-layer work with high LR?
-    ("nano-2L-8d-hiLR", 2, 1, 8, 32, 1e-2, 0.05),      # 2,200 params
+    ("nano-2L-8d-hiLR", 2, 1, 8, 32, 1e-2, 0.05),      # 2,200 params - FAIL 0.08%
 
     # Try even higher LR for pico models
     ("pico-1L-6d-lr03", 1, 1, 6, 24, 3e-2, 0.05),      # 846 params, very high LR
