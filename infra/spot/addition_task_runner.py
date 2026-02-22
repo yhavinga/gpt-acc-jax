@@ -13,48 +13,21 @@ import json
 import os
 import pickle
 import sys
-import threading
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from infra.spot import state as state_ops
-from infra.spot.config import ADDITION_SWEEP, GCS_RESULTS_DIR, HEARTBEAT_INTERVAL
+from infra.spot.config import ADDITION_SWEEP, GCS_RESULTS_DIR
 
 print = partial(print, flush=True)
 
 
-class HeartbeatThread(threading.Thread):
-    """Background thread that sends heartbeats to GCS."""
-
-    def __init__(self, task_id: str, interval: int = HEARTBEAT_INTERVAL):
-        super().__init__(daemon=True)
-        self.task_id = task_id
-        self.interval = interval
-        self.step = 0
-        self.best_score = None
-        self.stop_event = threading.Event()
-
-    def update(self, step: int, best_score: float = None):
-        self.step = step
-        if best_score is not None:
-            self.best_score = best_score
-
-    def stop(self):
-        self.stop_event.set()
-
-    def run(self):
-        while not self.stop_event.wait(self.interval):
-            try:
-                state_ops.heartbeat(self.task_id, self.step, self.best_score)
-                print(f"[heartbeat] step={self.step}, score={self.best_score}")
-            except Exception as e:
-                print(f"[heartbeat] Error: {e}")
+# HeartbeatThread removed - orchestrator now handles all state management
+# Task runner only logs to wandb, orchestrator polls wandb for completion
 
 
 def upload_to_gcs(local_path: str, gcs_path: str) -> bool:
@@ -73,7 +46,7 @@ def install_dependencies():
     commands = [
         "python3 -m pip install --upgrade pip",
         "python3 -m pip install 'jax[tpu]' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html",
-        "python3 -m pip install flax optax numpy",
+        "python3 -m pip install flax optax numpy wandb",
     ]
     for cmd in commands:
         print(f"  $ {cmd}")
@@ -119,7 +92,7 @@ def tokenize(s: str) -> List[int]:
     return [TOKENS[c] for c in s]
 
 
-def run_training(config: Config, heartbeat: HeartbeatThread, output_dir: str):
+def run_training(config: Config, output_dir: str, task_id: str = None):
     """Run training and return results dict."""
     import jax
     import jax.numpy as jnp
@@ -127,6 +100,24 @@ def run_training(config: Config, heartbeat: HeartbeatThread, output_dir: str):
     import optax
     import flax.linen as nn
     from flax.training import train_state
+
+    # Initialize wandb if API key is available
+    use_wandb = os.environ.get('WANDB_API_KEY') is not None
+    if use_wandb:
+        import wandb
+        wandb.init(
+            project="addition-sweep",
+            name=task_id,
+            config={
+                "n_layers": config.n_layers,
+                "n_heads": config.n_heads,
+                "d_model": config.d_model,
+                "d_ff": config.d_ff,
+                "batch_size": config.batch_size,
+                "learning_rate": config.learning_rate,
+            },
+        )
+        print(f"[wandb] Initialized: {wandb.run.url}")
 
     print(f"JAX devices: {jax.devices()}")
 
@@ -248,11 +239,14 @@ def run_training(config: Config, heartbeat: HeartbeatThread, output_dir: str):
             if global_step % 100 == 0:
                 print(f"Step {global_step}: loss={float(loss):.6f}, time={time.time()-start_time:.1f}s")
                 log['train_losses'].append({'step': global_step, 'loss': float(loss)})
+                if use_wandb:
+                    wandb.log({"train/loss": float(loss), "step": global_step})
             if global_step % config.eval_every == 0:
                 val_acc = evaluate(state, val_data[:1000])
                 print(f"  Val acc: {val_acc:.4f}")
                 log['val_accuracies'].append({'step': global_step, 'accuracy': val_acc})
-                heartbeat.update(global_step, val_acc)
+                if use_wandb:
+                    wandb.log({"val/accuracy": val_acc, "step": global_step})
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     with open(os.path.join(output_dir, 'best_params.pkl'), 'wb') as f:
@@ -263,6 +257,10 @@ def run_training(config: Config, heartbeat: HeartbeatThread, output_dir: str):
     final_val = evaluate(state, val_data)
     test_acc = evaluate(state, test_data)
     print(f"Val: {final_val:.4f}, Test: {test_acc:.4f}")
+
+    if use_wandb:
+        wandb.log({"final/val_accuracy": final_val, "final/test_accuracy": test_acc, "n_params": n_params})
+        wandb.finish()
 
     log.update({'final_val_accuracy': final_val, 'final_test_accuracy': test_acc, 'total_time': time.time() - start_time})
     with open(os.path.join(output_dir, 'log.json'), 'w') as f:
@@ -291,15 +289,8 @@ def main():
     config = Config(n_layers=n_layers, n_heads=n_heads, d_model=d_model, d_ff=d_ff)
     print(f"  Config: {n_layers}L {n_heads}H d={d_model} ff={d_ff}")
 
-    # Update state
-    state = state_ops.get_state(args.task_id)
-    if state:
-        state["status"] = "running"
-        state["started_at"] = datetime.now(timezone.utc).isoformat()
-        state_ops.put_state(args.task_id, state)
-
-    heartbeat = HeartbeatThread(args.task_id)
-    heartbeat.start()
+    # Note: orchestrator handles all GCS state management
+    # Task runner only trains and logs to wandb
 
     try:
         if not args.skip_install:
@@ -309,34 +300,20 @@ def main():
         output_dir = f"/tmp/addition_{args.task_id}"
         os.makedirs(output_dir, exist_ok=True)
 
-        results = run_training(config, heartbeat, output_dir)
+        results = run_training(config, output_dir, task_id=args.task_id)
 
-        # Upload
+        # Upload results to GCS
         upload_to_gcs(f"{output_dir}/*", args.output)
         with open(f"/tmp/results_{args.task_id}.json", 'w') as f:
             json.dump(results, f)
         upload_to_gcs(f"/tmp/results_{args.task_id}.json", f"{GCS_RESULTS_DIR}/{args.task_id}.json")
-
-        # Update state
-        state = state_ops.get_state(args.task_id)
-        if state:
-            state["status"] = "completed"
-            state["best_dev_score"] = results['val_accuracy']
-            state_ops.put_state(args.task_id, state)
 
         print(f"[addition_task_runner] Done! test={results['test_accuracy']:.4f}")
 
     except Exception as e:
         print(f"[error] {e}")
         import traceback; traceback.print_exc()
-        state = state_ops.get_state(args.task_id)
-        if state:
-            state["status"] = "failed"
-            state["error"] = str(e)
-            state_ops.put_state(args.task_id, state)
         sys.exit(1)
-    finally:
-        heartbeat.stop()
 
 
 if __name__ == "__main__":

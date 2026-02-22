@@ -41,6 +41,7 @@ ADDITION_SWEEP = [
     # Tiny models (~25-50K params)
     ("tiny-2L-32d", 2, 2, 32, 128),
     ("tiny-2L-48d", 2, 2, 48, 192),
+    ("tiny-3L-32d", 3, 2, 32, 128),  # NEW: deeper tiny
 
     # Small models (~50-100K params)
     ("small-2L-64d", 2, 2, 64, 256),
@@ -60,6 +61,8 @@ ADDITION_SWEEP = [
     # Larger models (~400-800K params)
     ("large-3L-128d", 3, 4, 128, 512),
     ("large-4L-128d", 4, 4, 128, 512),  # Reference: ~800K, known to work
+    ("large-3L-96d", 3, 4, 96, 384),    # NEW: smaller large
+    ("large-2L-128d", 2, 4, 128, 512),  # NEW: shallow large
 ]
 
 # Legacy fields for backward compatibility with DUMB eval

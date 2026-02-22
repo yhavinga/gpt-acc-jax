@@ -41,7 +41,9 @@ def put_state(task_id: str, state: dict) -> None:
         f.flush()
         temp_path = f.name
     try:
-        _run_gcloud(["cp", temp_path, gcs_path])
+        result = _run_gcloud(["cp", temp_path, gcs_path], check=False)
+        if result.returncode != 0:
+            print(f"[put_state] GCS write failed for {task_id}: {result.stderr}", flush=True)
     finally:
         Path(temp_path).unlink(missing_ok=True)
 

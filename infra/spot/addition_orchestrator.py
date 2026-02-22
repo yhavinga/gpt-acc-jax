@@ -52,6 +52,72 @@ WORKER_PREEMPTED = "preempted"
 workers = {}  # vm_name -> {"state": ..., "task_id": ..., "created_at": ...}
 workers_lock = threading.Lock()
 
+# Cached wandb API key (read once from ~/.netrc)
+_wandb_api_key = None
+
+
+def get_wandb_api_key() -> Optional[str]:
+    """Read wandb API key from ~/.netrc (cached)."""
+    global _wandb_api_key
+    if _wandb_api_key is not None:
+        return _wandb_api_key if _wandb_api_key != "" else None
+
+    import os
+    netrc_path = os.path.expanduser("~/.netrc")
+    if not os.path.exists(netrc_path):
+        _wandb_api_key = ""
+        return None
+
+    try:
+        with open(netrc_path) as f:
+            content = f.read()
+        # Parse netrc for api.wandb.ai password
+        import re
+        match = re.search(r'machine\s+api\.wandb\.ai\s+.*?password\s+(\S+)', content, re.DOTALL)
+        if match:
+            _wandb_api_key = match.group(1)
+            log(f"[wandb] Found API key in ~/.netrc")
+            return _wandb_api_key
+    except Exception as e:
+        log(f"[wandb] Error reading ~/.netrc: {e}")
+
+    _wandb_api_key = ""
+    return None
+
+
+def check_wandb_run_status(task_id: str) -> dict | None:
+    """
+    Check wandb for run completion status.
+    Returns dict with 'state', 'test_accuracy', 'val_accuracy' if found, None otherwise.
+    """
+    api_key = get_wandb_api_key()
+    if not api_key:
+        return None
+
+    try:
+        import wandb
+        api = wandb.Api()
+        # Find run by name in the addition-sweep project
+        runs = api.runs("addition-sweep", filters={"display_name": task_id})
+        for run in runs:
+            if run.state == "finished":
+                # Get final metrics from summary
+                summary = run.summary
+                return {
+                    "state": "finished",
+                    "test_accuracy": summary.get("final/test_accuracy"),
+                    "val_accuracy": summary.get("final/val_accuracy"),
+                    "n_params": summary.get("n_params"),
+                }
+            elif run.state == "running":
+                return {"state": "running"}
+            elif run.state in ("crashed", "failed"):
+                return {"state": "failed"}
+        return None  # No matching run found
+    except Exception as e:
+        # Don't spam logs, wandb check failures are non-critical
+        return None
+
 
 def log(msg: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -167,7 +233,7 @@ def install_on_worker(vm_name: str) -> bool:
     install_cmd = (
         "pip3 install --quiet --upgrade pip && "
         "pip3 install --quiet 'jax[tpu]' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && "
-        "pip3 install --quiet flax optax numpy"
+        "pip3 install --quiet flax optax numpy wandb"
     )
     rc, stdout, stderr = vm_ops.ssh_command(vm_name, install_cmd)
     if rc != 0:
@@ -284,8 +350,15 @@ def assign_task_to_worker(vm_name: str, task_id: str) -> bool:
 
     # Start task runner on worker (fire and forget - don't wait for SSH)
     gcs_output = f"{GCS_RUNS_DIR}/{task_id}"
+
+    # Get wandb API key from local ~/.netrc if available
+    wandb_export = ""
+    wandb_key = get_wandb_api_key()
+    if wandb_key:
+        wandb_export = f"export WANDB_API_KEY={wandb_key} && "
+
     runner_cmd = (
-        f"cd {REMOTE_DIR} && python3 -u -m infra.spot.addition_task_runner "
+        f"cd {REMOTE_DIR} && {wandb_export}python3 -u -m infra.spot.addition_task_runner "
         f"--task-id {task_id} --output {gcs_output} --skip-install "
         f">/tmp/task_runner.log 2>&1"
     )
@@ -299,12 +372,12 @@ def assign_task_to_worker(vm_name: str, task_id: str) -> bool:
             workers[vm_name]["task_id"] = None
         return False
 
-    log(f"  [ok] Task started")
+    log(f"  [ok] Task started" + (" (with wandb)" if wandb_key else ""))
     return True
 
 
 def check_workers_and_tasks():
-    """Check worker health and task completion."""
+    """Check worker health and task completion via wandb."""
     now = datetime.now(timezone.utc)
     vms = {v["name"]: v["state"] for v in vm_ops.list_vms(prefix="add-")}
 
@@ -312,7 +385,6 @@ def check_workers_and_tasks():
         worker_list = list(workers.items())
 
     for vm_name, worker in worker_list:
-        # Check if VM still exists
         vm_state = vms.get(vm_name)
 
         if worker["state"] == WORKER_BUSY:
@@ -324,7 +396,19 @@ def check_workers_and_tasks():
             if not task_state:
                 continue
 
-            # Check if task completed
+            # Check wandb for completion (primary method)
+            wandb_status = check_wandb_run_status(task_id)
+            if wandb_status and wandb_status.get("state") == "finished":
+                log(f"[complete] {task_id} on {vm_name} (wandb: acc={wandb_status.get('test_accuracy', '?')})")
+                task_state["status"] = "completed"
+                task_state["best_dev_score"] = wandb_status.get("val_accuracy")
+                state_ops.put_state(task_id, task_state)
+                with workers_lock:
+                    workers[vm_name]["state"] = WORKER_READY
+                    workers[vm_name]["task_id"] = None
+                continue
+
+            # Check if task already marked completed in GCS (fallback)
             if task_state["status"] == "completed":
                 log(f"[complete] {task_id} on {vm_name}")
                 with workers_lock:
@@ -332,26 +416,26 @@ def check_workers_and_tasks():
                     workers[vm_name]["task_id"] = None
                 continue
 
-            # Check for preemption (VM gone + stale heartbeat)
+            # Check for preemption (VM gone)
             vm_alive = vm_state == "READY"
-            heartbeat_fresh = False
-            if task_state.get("last_heartbeat"):
-                age = (now - datetime.fromisoformat(task_state["last_heartbeat"])).total_seconds()
-                heartbeat_fresh = age < HEARTBEAT_TIMEOUT
+            if not vm_alive:
+                # Give wandb a chance to report completion before declaring preemption
+                started = task_state.get("started_at")
+                if started:
+                    age = (now - datetime.fromisoformat(started)).total_seconds()
+                    # If task ran for at least 5 minutes, it might have finished
+                    if age > 300 and wandb_status is None:
+                        log(f"[preempt] {task_id} on {vm_name} (VM gone, no wandb data)")
+                        task_state["status"] = "pending"
+                        task_state["preemption_count"] = task_state.get("preemption_count", 0) + 1
+                        state_ops.put_state(task_id, task_state)
+                        with workers_lock:
+                            workers[vm_name]["state"] = WORKER_PREEMPTED
 
-            if not vm_alive and not heartbeat_fresh:
-                log(f"[preempt] {task_id} on {vm_name}")
-                task_state["status"] = "pending"  # Return to queue
-                task_state["preemption_count"] = task_state.get("preemption_count", 0) + 1
-                state_ops.put_state(task_id, task_state)
-                with workers_lock:
-                    workers[vm_name]["state"] = WORKER_PREEMPTED
-
-            # Check if task failed
-            if task_state["status"] == "failed":
-                log(f"[failed] {task_id} on {vm_name} - returning to queue")
-                task_state["status"] = "pending"  # Return to queue for retry
-                task_state["error"] = None
+            # Check if wandb reports failure
+            if wandb_status and wandb_status.get("state") == "failed":
+                log(f"[failed] {task_id} on {vm_name} (wandb) - returning to queue")
+                task_state["status"] = "pending"
                 state_ops.put_state(task_id, task_state)
                 with workers_lock:
                     workers[vm_name]["state"] = WORKER_READY

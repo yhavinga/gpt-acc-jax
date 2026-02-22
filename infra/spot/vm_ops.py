@@ -136,8 +136,10 @@ def ssh_command_fire_and_forget(vm_name: str, command: str) -> bool:
     Uses timeout to avoid waiting for SSH to close file descriptors.
     Returns True if command was sent (doesn't guarantee execution).
     """
-    # Use setsid to detach from controlling terminal
-    bg_command = f"setsid {command} </dev/null >/dev/null 2>&1 &"
+    # Wrap in bash -c and use setsid to detach from controlling terminal
+    # The bash -c ensures the entire command runs in the new session
+    escaped_cmd = command.replace("'", "'\\''")
+    bg_command = f"setsid bash -c '{escaped_cmd}' </dev/null >/dev/null 2>&1 &"
     # 5 second timeout - enough to start the process
     rc, _, _ = ssh_command(vm_name, bg_command, timeout=5)
     return rc == 0
