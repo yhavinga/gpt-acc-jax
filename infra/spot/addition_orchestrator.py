@@ -476,12 +476,22 @@ def cmd_init(args):
     created = 0
 
     for entry in ADDITION_SWEEP:
-        # Support both old format (5 fields) and new format (7 fields)
+        # Support multiple formats:
+        # 5 fields: (task_id, n_layers, n_heads, d_model, d_ff)
+        # 7 fields: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio)
+        # 9 fields: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb)
+        lr, warmup_ratio = 1e-3, 0.05
+        ffn_bias, tied_emb = True, False
+
         if len(entry) == 5:
             task_id, n_layers, n_heads, d_model, d_ff = entry
-            lr, warmup_ratio = 1e-3, 0.05
-        else:
+        elif len(entry) == 7:
             task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio = entry
+        elif len(entry) >= 9:
+            task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb = entry[:9]
+        else:
+            print(f"  [error] Invalid entry: {entry}")
+            continue
 
         if task_id in existing:
             print(f"  [skip] {task_id}")
@@ -497,6 +507,8 @@ def cmd_init(args):
                 "d_ff": d_ff,
                 "lr": lr,
                 "warmup_ratio": warmup_ratio,
+                "ffn_bias": ffn_bias,
+                "tied_emb": tied_emb,
             },
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
