@@ -115,6 +115,7 @@ def run_training(config: Config, output_dir: str, task_id: str = None):
                 "d_ff": config.d_ff,
                 "batch_size": config.batch_size,
                 "learning_rate": config.learning_rate,
+                "warmup_steps": config.warmup_steps,
             },
         )
         print(f"[wandb] Initialized: {wandb.run.url}")
@@ -279,15 +280,32 @@ def main():
     print(f"[addition_task_runner] Task: {args.task_id}")
     print(f"[addition_task_runner] Output: {args.output}")
 
-    # Find config
+    # Find config - supports both old format (5 fields) and new format (7 fields)
     config_entry = next((e for e in ADDITION_SWEEP if e[0] == args.task_id), None)
     if not config_entry:
         print(f"[error] Unknown task_id: {args.task_id}")
         sys.exit(1)
 
-    _, n_layers, n_heads, d_model, d_ff = config_entry
-    config = Config(n_layers=n_layers, n_heads=n_heads, d_model=d_model, d_ff=d_ff)
-    print(f"  Config: {n_layers}L {n_heads}H d={d_model} ff={d_ff}")
+    # Parse config entry (backwards compatible)
+    if len(config_entry) == 5:
+        _, n_layers, n_heads, d_model, d_ff = config_entry
+        lr, warmup_ratio = 1e-3, 0.05
+    else:
+        _, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio = config_entry
+
+    # Calculate warmup steps as percentage of total curriculum
+    total_steps = 27000  # 2000 + 5000 + 20000
+    warmup_steps = int(total_steps * warmup_ratio)
+
+    config = Config(
+        n_layers=n_layers,
+        n_heads=n_heads,
+        d_model=d_model,
+        d_ff=d_ff,
+        learning_rate=lr,
+        warmup_steps=warmup_steps
+    )
+    print(f"  Config: {n_layers}L {n_heads}H d={d_model} ff={d_ff} lr={lr} warmup={warmup_steps}")
 
     # Note: orchestrator handles all GCS state management
     # Task runner only trains and logs to wandb
