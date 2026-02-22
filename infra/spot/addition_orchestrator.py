@@ -475,7 +475,14 @@ def cmd_init(args):
     existing = {s["task_id"] for s in state_ops.list_states()}
     created = 0
 
-    for task_id, n_layers, n_heads, d_model, d_ff in ADDITION_SWEEP:
+    for entry in ADDITION_SWEEP:
+        # Support both old format (5 fields) and new format (7 fields)
+        if len(entry) == 5:
+            task_id, n_layers, n_heads, d_model, d_ff = entry
+            lr, warmup_ratio = 1e-3, 0.05
+        else:
+            task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio = entry
+
         if task_id in existing:
             print(f"  [skip] {task_id}")
             continue
@@ -483,7 +490,14 @@ def cmd_init(args):
         state = {
             "task_id": task_id,
             "vm_name": None,
-            "config": {"n_layers": n_layers, "n_heads": n_heads, "d_model": d_model, "d_ff": d_ff},
+            "config": {
+                "n_layers": n_layers,
+                "n_heads": n_heads,
+                "d_model": d_model,
+                "d_ff": d_ff,
+                "lr": lr,
+                "warmup_ratio": warmup_ratio,
+            },
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "started_at": None,
