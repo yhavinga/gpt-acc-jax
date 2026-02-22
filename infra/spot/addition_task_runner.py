@@ -241,13 +241,13 @@ def run_training(config: Config, output_dir: str, task_id: str = None):
                 print(f"Step {global_step}: loss={float(loss):.6f}, time={time.time()-start_time:.1f}s")
                 log['train_losses'].append({'step': global_step, 'loss': float(loss)})
                 if use_wandb:
-                    wandb.log({"train/loss": float(loss), "step": global_step})
+                    wandb.log({"train/loss": float(loss)}, step=global_step)
             if global_step % config.eval_every == 0:
                 val_acc = evaluate(state, val_data[:1000])
                 print(f"  Val acc: {val_acc:.4f}")
                 log['val_accuracies'].append({'step': global_step, 'accuracy': val_acc})
                 if use_wandb:
-                    wandb.log({"val/accuracy": val_acc, "step": global_step})
+                    wandb.log({"val/accuracy": val_acc}, step=global_step)
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     with open(os.path.join(output_dir, 'best_params.pkl'), 'wb') as f:
@@ -260,7 +260,7 @@ def run_training(config: Config, output_dir: str, task_id: str = None):
     print(f"Val: {final_val:.4f}, Test: {test_acc:.4f}")
 
     if use_wandb:
-        wandb.log({"final/val_accuracy": final_val, "final/test_accuracy": test_acc, "n_params": n_params})
+        wandb.log({"final/val_accuracy": final_val, "final/test_accuracy": test_acc, "n_params": n_params}, step=global_step)
         wandb.finish()
 
     log.update({'final_val_accuracy': final_val, 'final_test_accuracy': test_acc, 'total_time': time.time() - start_time})
