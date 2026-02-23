@@ -174,7 +174,17 @@ The parameter cliff - sharp transition at ~800 parameters:
 pip install jax flax optax numpy wandb matplotlib pandas
 ```
 
-### Train a single model
+### Configuration
+
+Before running, edit `infra/spot/config.py`:
+
+```python
+GCS_BUCKET = "your-gcs-bucket"      # Your GCS bucket name
+PROJECT = "your-gcp-project"         # Your GCP project ID
+ZONE = "us-central2-b"               # TPU zone
+```
+
+### Train a single model locally
 
 ```bash
 python -m infra.spot.addition_task_runner \
@@ -183,6 +193,35 @@ python -m infra.spot.addition_task_runner \
     --lr 0.02 --warmup 0.05 \
     --no_ffn_bias --tied_emb
 ```
+
+### Run a full sweep on TPU spot instances
+
+The orchestrator manages multiple TPU VMs running experiments in parallel:
+
+```bash
+# 1. Initialize task queue from ADDITION_SWEEP config
+python -m infra.spot.addition_orchestrator init
+
+# 2. Check status of tasks and workers
+python -m infra.spot.addition_orchestrator status
+
+# 3. Run orchestration loop (launches VMs, assigns tasks, handles preemptions)
+python -m infra.spot.addition_orchestrator run
+
+# 4. View completed results
+python -m infra.spot.addition_orchestrator results
+
+# 5. Cleanup - delete all VMs
+python -m infra.spot.addition_orchestrator cleanup
+```
+
+The orchestrator will:
+- Spin up TPU v4-8 spot VMs (up to `MAX_CONCURRENT_VMS`)
+- Deploy code and install dependencies on each VM
+- Assign pending tasks to idle workers
+- Monitor task completion via Weights & Biases
+- Handle preemptions by re-queuing failed tasks
+- Clean up VMs when done
 
 ### Regenerate figures
 

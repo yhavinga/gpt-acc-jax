@@ -23,22 +23,26 @@ Usage:
 
 import argparse
 import concurrent.futures
+import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from . import state as state_ops
 from . import vm_ops
 from .config import (
     ADDITION_SWEEP,
+    GCS_BUCKET,
+    GCS_PREFIX,
     GCS_RUNS_DIR,
     HEARTBEAT_TIMEOUT,
     MAX_CONCURRENT_VMS,
     POLL_INTERVAL,
     REMOTE_DIR,
 )
-from .orchestrator import deploy_code
 
 # Worker states
 WORKER_CREATING = "creating"
@@ -121,6 +125,62 @@ def check_wandb_run_status(task_id: str) -> dict | None:
 
 def log(msg: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def deploy_code(vm_name: str) -> bool:
+    """Deploy code to a VM by creating tarball, uploading to GCS, and extracting on VM."""
+    print("  Creating code tarball...")
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+        tarball_path = f.name
+
+    # Create tarball with essential directories
+    tar_cmd = [
+        "tar", "-czf", tarball_path,
+        "--exclude=*.pyc",
+        "--exclude=__pycache__",
+        "--exclude=.git",
+        "--exclude=venv",
+        "--exclude=checkpoints",
+        "--exclude=experiments",
+        "--exclude=artifacts",
+        "--exclude=*.pkl",
+        "--exclude=*.safetensors",
+        "--exclude=latex_report",
+        "-C", str(Path(__file__).parent.parent.parent),
+        "infra", "addition_experiment_claude_ver2"
+    ]
+    result = subprocess.run(tar_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  [error] Failed to create tarball: {result.stderr}")
+        return False
+
+    # Upload to GCS
+    gcs_tarball = f"gs://{GCS_BUCKET}/{GCS_PREFIX}/code/gpt-acc-jax.tar.gz"
+    print(f"  Uploading to {gcs_tarball}...")
+    result = subprocess.run(
+        ["gcloud", "storage", "cp", tarball_path, gcs_tarball],
+        capture_output=True, text=True
+    )
+    Path(tarball_path).unlink(missing_ok=True)
+    if result.returncode != 0:
+        print(f"  [error] Failed to upload tarball: {result.stderr}")
+        return False
+
+    # Download and extract on VM
+    print("  Extracting on VM...")
+    setup_cmd = (
+        f"mkdir -p {REMOTE_DIR} && "
+        f"cd {REMOTE_DIR} && "
+        f"gcloud storage cp {gcs_tarball} /tmp/code.tar.gz && "
+        f"tar -xzf /tmp/code.tar.gz && "
+        f"rm /tmp/code.tar.gz"
+    )
+    returncode, stdout, stderr = vm_ops.ssh_command(vm_name, setup_cmd)
+    if returncode != 0:
+        print(f"  [error] Failed to extract code: {stderr}")
+        return False
+
+    return True
 
 
 def discover_existing_workers(redeploy: bool = True) -> int:
