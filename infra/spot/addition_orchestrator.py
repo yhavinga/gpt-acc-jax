@@ -477,21 +477,42 @@ def cmd_init(args):
 
     for entry in ADDITION_SWEEP:
         # Support multiple formats:
+        # Dict: {"task_id": ..., "n_layers": ..., ...}
         # 5 fields: (task_id, n_layers, n_heads, d_model, d_ff)
         # 7 fields: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio)
         # 9 fields: (task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb)
-        lr, warmup_ratio = 1e-3, 0.05
-        ffn_bias, tied_emb = True, False
 
-        if len(entry) == 5:
-            task_id, n_layers, n_heads, d_model, d_ff = entry
-        elif len(entry) == 7:
-            task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio = entry
-        elif len(entry) >= 9:
-            task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb = entry[:9]
+        if isinstance(entry, dict):
+            # Dict format - extract all fields
+            task_id = entry["task_id"]
+            n_layers = entry["n_layers"]
+            n_heads = entry["n_heads"]
+            d_model = entry["d_model"]
+            d_ff = entry["d_ff"]
+            lr = entry.get("lr", 1e-3)
+            warmup_ratio = entry.get("warmup", 0.05)
+            ffn_bias = entry.get("ffn_bias", True)
+            tied_emb = entry.get("tied_emb", False)
+            sinusoidal = entry.get("sinusoidal", False)
+            rmsnorm = entry.get("rmsnorm", False)
+            no_delim = entry.get("no_delim", False)
+            tied_qk = entry.get("tied_qk", False)
+            rope = entry.get("rope", False)
         else:
-            print(f"  [error] Invalid entry: {entry}")
-            continue
+            # Tuple format (backwards compatible)
+            lr, warmup_ratio = 1e-3, 0.05
+            ffn_bias, tied_emb = True, False
+            sinusoidal, rmsnorm, no_delim, tied_qk, rope = False, False, False, False, False
+
+            if len(entry) == 5:
+                task_id, n_layers, n_heads, d_model, d_ff = entry
+            elif len(entry) == 7:
+                task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio = entry
+            elif len(entry) >= 9:
+                task_id, n_layers, n_heads, d_model, d_ff, lr, warmup_ratio, ffn_bias, tied_emb = entry[:9]
+            else:
+                print(f"  [error] Invalid entry: {entry}")
+                continue
 
         if task_id in existing:
             print(f"  [skip] {task_id}")
@@ -509,6 +530,11 @@ def cmd_init(args):
                 "warmup_ratio": warmup_ratio,
                 "ffn_bias": ffn_bias,
                 "tied_emb": tied_emb,
+                "sinusoidal": sinusoidal,
+                "rmsnorm": rmsnorm,
+                "no_delim": no_delim,
+                "tied_qk": tied_qk,
+                "rope": rope,
             },
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat(),
