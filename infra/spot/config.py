@@ -10,14 +10,7 @@ GCS_STATE_DIR = f"gs://{GCS_BUCKET}/{GCS_PREFIX}/state"
 GCS_RUNS_DIR = f"gs://{GCS_BUCKET}/{GCS_PREFIX}/runs"
 GCS_RESULTS_DIR = f"gs://{GCS_BUCKET}/{GCS_PREFIX}/results"
 
-# TPU VM configuration - using TRC spot allotments
-# Available zones:
-#   us-central2-b: 32 v4 chips (v4-8 = 1 VM, v4-32 = 4 workers)
-#   us-central1-a: 64 v5e chips
-#   europe-west4-b: 64 v5e chips
-#   europe-west4-a: 64 v6e chips
-#   us-east1-d: 64 v6e chips
-
+# TPU VM configuration
 PROJECT = "YOUR_GCP_PROJECT"
 ZONE = "us-central2-b"
 TPU_TYPE = "v4-8"
